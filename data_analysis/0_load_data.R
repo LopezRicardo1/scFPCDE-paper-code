@@ -21,7 +21,7 @@ theme_set(theme_cowplot())
 
 # Set the repository root manually if the script is not run
 # from within the RStudio project
-# setwd("/path/to/scFPCDE-paper-code")
+# setwd("my directory")
 
 # Load data from the repository data directory
 seu <- readRDS("data/scPure2_HB6_UMAP3D.rds") |>
