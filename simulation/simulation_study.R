@@ -94,8 +94,15 @@ names(Dvals) <- fit$D_test_result$ID
 top_genes <- names(sort(Dvals, decreasing = TRUE))[1:6]
 bot_genes <- names(sort(Dvals))[1:6+2500]
 topbot = c(top_genes, bot_genes)
-Xt_hat <- fit$fpca_result$xt_hat
-Yt     <- Y_log[, keep]
+Yt <- Y_log[, keep, drop = FALSE]
+gene_means <- colMeans(Yt)
+Xt_hat_centered <- fit$fpca_result$xt_hat
+Xt_hat <- sweep(
+  Xt_hat_centered,
+  MARGIN = 2,
+  STATS = gene_means[colnames(Xt_hat_centered)],
+  FUN = "+"
+)
 
 library(ggplot2)
 library(dplyr)
