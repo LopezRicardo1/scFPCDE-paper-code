@@ -31,11 +31,25 @@
 
 suppressPackageStartupMessages({
   library(dplyr)
-  library(monocle3)
   library(Matrix)
+  library(SingleCellExperiment)
+  library(SummarizedExperiment)
 })
 
 graphics.off()
+
+get_analysis_clusters <- function(cds_obj) {
+  cell_data <- as.data.frame(SummarizedExperiment::colData(cds_obj))
+  cluster_column <- c("cluster", "cell_type")
+  cluster_column <- cluster_column[cluster_column %in% names(cell_data)]
+  if (!length(cluster_column)) {
+    stop("cds_obj must contain a cluster or cell_type column.", call. = FALSE)
+  }
+
+  cluster_values <- as.character(cell_data[[cluster_column[[1L]]]])
+  names(cluster_values) <- rownames(cell_data)
+  cluster_values
+}
 
 ## ============================================================
 ## Global slide and output settings
@@ -1435,9 +1449,7 @@ plot_gene_panels_base_absolute <- function(fpca.obj,
   ## Cluster information
   ## ----------------------------------------------------------
   
-  clu_raw <- as.character(
-    monocle3::clusters(cds_obj)
-  )
+  clu_raw <- get_analysis_clusters(cds_obj)
   
   if (!is.null(cluster_order)) {
     
@@ -1541,9 +1553,7 @@ plot_gene_panels_base_absolute <- function(fpca.obj,
   ## Expression matrix from cds_obj
   ## ----------------------------------------------------------
   
-  expr_mat <- monocle3::exprs(
-    cds_obj
-  )
+  expr_mat <- SingleCellExperiment::logcounts(cds_obj)
   
   cell_ids_cds <- colnames(
     expr_mat

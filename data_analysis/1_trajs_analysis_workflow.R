@@ -5,32 +5,79 @@
 ##   - each trajectory has its own filtering and tuning settings
 ##   - all results saved in one list: traj_results
 ## ============================================================
+
+## Load either the local full objects or the packaged preprocessed trajectories.
+## Sourcing this script directly therefore has the same behavior as running
+## 0_load_data.R first.
+if (!exists("analysis_data_source", inherits = FALSE)) {
+  load_script <- if (file.exists(file.path("data_analysis", "0_load_data.R"))) {
+    file.path("data_analysis", "0_load_data.R")
+  } else {
+    "0_load_data.R"
+  }
+  source(load_script)
+}
+
+if (!analysis_data_source %in% c(
+  "local_full_objects",
+  "package_preprocessed"
+)) {
+  stop("Unknown HB6 analysis_data_source.", call. = FALSE)
+}
+
 suppressPackageStartupMessages({
-  library(readr)
-  library(fda)
   library(scFPCDE)
-  library(parallel)
   library(PseudotimeDE)
-  library(Seurat)
-  library(SeuratObject)
-  library(SeuratWrappers)
-  library(monocle3)
+  library(SingleCellExperiment)
+  library(SummarizedExperiment)
+  library(S4Vectors)
+  library(Matrix)
   library(dplyr)
-  library(ggplot2)
-  library(tidyr)
-  library(ggvenn)
-  library(tidyverse)
-  library(gridExtra)
-  library(patchwork)
-  library(UpSetR)
-  library(cowplot)
 })
 
-# Load Seurat object from file
-# seu = readRDS("my directory/scPure2_HB6_UMAP3D.rds")%>% 
-#   UpdateSeuratObject() 
-# cds = readRDS("my directory/cds_HB6.rds")
-# mst = cds@principal_graph_aux$UMAP$pr_graph_cell_proj_dist %>% t()
+if (analysis_data_source == "local_full_objects") {
+  suppressPackageStartupMessages({
+    library(Seurat)
+    library(SeuratObject)
+    library(SeuratWrappers)
+    library(monocle3)
+  })
+}
+
+make_packaged_sce <- function(trajectory, cfg) {
+  stopifnot(
+    identical(dimnames(trajectory$counts), dimnames(trajectory$yt)),
+    identical(rownames(trajectory$yt), names(trajectory$tt)),
+    identical(rownames(trajectory$yt), names(trajectory$clusters))
+  )
+
+  count_matrix <- Matrix::Matrix(t(trajectory$counts), sparse = TRUE)
+  logcount_matrix <- Matrix::Matrix(t(trajectory$yt), sparse = TRUE)
+  cell_data <- S4Vectors::DataFrame(
+    cell_type = trajectory$clusters,
+    cluster = trajectory$clusters,
+    monocle3_pseudotime = trajectory$tt,
+    pseudotime = trajectory$tt,
+    row.names = trajectory$cell_id
+  )
+  gene_data <- S4Vectors::DataFrame(
+    gene_short_name = trajectory$gene_id,
+    row.names = trajectory$gene_id
+  )
+
+  SingleCellExperiment::SingleCellExperiment(
+    assays = list(
+      counts = count_matrix,
+      logcounts = logcount_matrix
+    ),
+    colData = cell_data,
+    rowData = gene_data,
+    metadata = list(
+      study = cfg$analysis_tag,
+      source = "scFPCDE::scFPCDE_hb6"
+    )
+  )
+}
 
 ## ------------------------------------------------------------
 ## Per-trajectory settings
@@ -52,6 +99,7 @@ traj_defs <- list(
     r_pen_range_local = seq(5, 12, 0.21),
     n_perm_main = 500,
     n_perm_deg = 5,
+    ncores_scfpcde = 2,
     mc_cores_ptde = 12
   ),
   traj2 = list(
@@ -70,6 +118,7 @@ traj_defs <- list(
     r_pen_range_local = seq(8, 12, 0.21),
     n_perm_main = 500,
     n_perm_deg = 5,
+    ncores_scfpcde = 2,
     mc_cores_ptde = 12
   )
 )
@@ -87,73 +136,107 @@ for (nm in names(traj_defs)) {
   cfg <- traj_defs[[nm]]
   message("Running ", nm, " ...")
   
-  ## ----------------------------------------------------------
-  ## 1) Subset cds by clusters
-  ## ----------------------------------------------------------
-  cds_sub <- cds[, colData(cds)$cluster %in% cfg$clusters]
-  
-  ptime.filter <- cds_sub %>%
-    colData() %>%
-    as.data.frame() %>%
-    mutate(cell_barcode = colnames(cds_sub)) %>%
-    filter(
-      monocle3_pseudotime > quantile(monocle3_pseudotime, cfg$ptime_global_lo),
-      monocle3_pseudotime < quantile(monocle3_pseudotime, cfg$ptime_global_hi)
-    ) %>%
-    group_by(cluster) %>%
-    filter(
-      monocle3_pseudotime > quantile(monocle3_pseudotime, cfg$ptime_cluster_lo),
-      monocle3_pseudotime < quantile(monocle3_pseudotime, cfg$ptime_cluster_hi)
-    ) %>%
-    arrange(monocle3_pseudotime) %>%
-    pull(cell_barcode)
-  
-  cds_sub <- cds_sub[, ptime.filter]
-  data.pseudo <- as.data.frame(colData(cds_sub))
-  
-  ## ----------------------------------------------------------
-  ## 2) Matching Seurat subset
-  ## ----------------------------------------------------------
-  seu_sub <- seu[, names(pseudotime(cds_sub))]
-  
-  seu_sub <- subset(
-    seu_sub,
-    subset = nFeature_RNA > quantile(nFeature_RNA, 0.01) &
-      nFeature_RNA < quantile(nFeature_RNA, 0.99) &
-      percent.mt < quantile(percent.mt, 0.99) &
-      percent.mt > quantile(percent.mt, 0.01)
-  )
-  
-  seu_sub <- FindVariableFeatures(seu_sub, selection.method = "vst", nfeatures = 4000)
-  top10 <- head(VariableFeatures(seu_sub), 10)
-  
-  ## ----------------------------------------------------------
-  ## 3) Build y, tt, z
-  ## ----------------------------------------------------------
-  topvargenes <- c(VariableFeatures(seu_sub), "ACTB")
-  
-  y <- logcounts(cds_sub) %>% as.matrix() %>% t
-  tt <- pseudotime(cds_sub)
-  tt.cluster <- clusters(cds_sub)
-  tt.cluster <- droplevels(tt.cluster)
-  
-  tt.order <- order(tt)
-  y <- y[tt.order, , drop = FALSE]
-  tt <- tt[tt.order]
-  tt.cluster <- tt.cluster[tt.order]
-  
-  y <- y[, topvargenes, drop = FALSE]
+  if (analysis_data_source == "local_full_objects") {
+    ## --------------------------------------------------------
+    ## 1a) Reproduce cell and gene selection from full objects
+    ## --------------------------------------------------------
+    cds_sub <- cds[, colData(cds)$cluster %in% cfg$clusters]
+
+    ptime.filter <- cds_sub %>%
+      colData() %>%
+      as.data.frame() %>%
+      mutate(cell_barcode = colnames(cds_sub)) %>%
+      filter(
+        monocle3_pseudotime > quantile(
+          monocle3_pseudotime,
+          cfg$ptime_global_lo
+        ),
+        monocle3_pseudotime < quantile(
+          monocle3_pseudotime,
+          cfg$ptime_global_hi
+        )
+      ) %>%
+      group_by(cluster) %>%
+      filter(
+        monocle3_pseudotime > quantile(
+          monocle3_pseudotime,
+          cfg$ptime_cluster_lo
+        ),
+        monocle3_pseudotime < quantile(
+          monocle3_pseudotime,
+          cfg$ptime_cluster_hi
+        )
+      ) %>%
+      arrange(monocle3_pseudotime) %>%
+      pull(cell_barcode)
+
+    cds_sub <- cds_sub[, ptime.filter]
+    data.pseudo <- as.data.frame(colData(cds_sub))
+
+    seu_sub <- seu[, names(pseudotime(cds_sub))]
+    seu_sub <- subset(
+      seu_sub,
+      subset = nFeature_RNA > quantile(nFeature_RNA, 0.01) &
+        nFeature_RNA < quantile(nFeature_RNA, 0.99) &
+        percent.mt < quantile(percent.mt, 0.99) &
+        percent.mt > quantile(percent.mt, 0.01)
+    )
+    seu_sub <- FindVariableFeatures(
+      seu_sub,
+      selection.method = "vst",
+      nfeatures = 4000
+    )
+    top10 <- head(VariableFeatures(seu_sub), 10)
+    topvargenes <- c(VariableFeatures(seu_sub), "ACTB")
+
+    y <- logcounts(cds_sub) %>% as.matrix() %>% t
+    tt <- pseudotime(cds_sub)
+    tt.cluster <- droplevels(clusters(cds_sub))
+
+    tt.order <- order(tt)
+    y <- y[tt.order, , drop = FALSE]
+    tt <- tt[tt.order]
+    tt.cluster <- tt.cluster[tt.order]
+
+    y <- y[, topvargenes, drop = FALSE]
+    filter_quantile <- if (nm == "traj1") 0.25 else 0.50
+    gene.low.counts <- scFPCDE_filter_genes(y, filter_quantile)
+    y <- y[, gene.low.counts, drop = FALSE]
+  } else {
+    ## --------------------------------------------------------
+    ## 1b) Use the exact preprocessed package trajectory
+    ## --------------------------------------------------------
+    packaged <- hb6_package_data[[nm]]
+    if (is.null(packaged)) {
+      stop("Packaged trajectory was not found: ", nm, call. = FALSE)
+    }
+
+    cds_sub <- make_packaged_sce(packaged, cfg)
+    data.pseudo <- as.data.frame(colData(cds_sub))
+    seu_sub <- NULL
+
+    y <- packaged$yt
+    tt <- packaged$tt
+    tt.cluster <- droplevels(packaged$clusters)
+    tt.order <- order(tt)
+    y <- y[tt.order, , drop = FALSE]
+    tt <- tt[tt.order]
+    tt.cluster <- tt.cluster[tt.order]
+
+    topvargenes <- colnames(y)
+    top10 <- head(topvargenes, 10)
+    gene.low.counts <- colnames(y)
+
+    message(
+      "Using packaged ", nm, ": ", nrow(y), " cells x ",
+      ncol(y), " already-selected genes."
+    )
+  }
+
+  ## The FPCA model uses centered log-expression in both input modes.
   z <- ifelse(y == 0, 0, 1)
-  if(nm=="traj1")
-    gene.low.counts <- scFPCDE_filter_genes(y, 0.25)
-  if(nm=="traj2")
-    gene.low.counts <- scFPCDE_filter_genes(y, 0.5)
-  
-  y <- y[, gene.low.counts, drop = FALSE]
-  z <- ifelse(y == 0, 0, 1)
-  
   y <- t(t(y) - colMeans(y))
-  
+
   gene.min.count <- names(which.min(colSums(z)))
   gene.max.count <- names(which.max(colSums(z)))
   
@@ -167,7 +250,8 @@ for (nm in names(traj_defs)) {
     L = cfg$L,
     nbasis_range = cfg$nbasis_range,
     r_pen_range = cfg$r_pen_range_all,
-    topvarper = 1
+    topvarper = 1,
+    ncores = cfg$ncores_scfpcde
   )
   
   fpc.gcv.res <- scFPCDE_tune_fpca(
@@ -175,7 +259,8 @@ for (nm in names(traj_defs)) {
     L = cfg$L,
     nbasis_range = cfg$nbasis_range,
     r_pen_range = cfg$r_pen_range_local,
-    topvarper = cfg$topvarper_tune
+    topvarper = cfg$topvarper_tune,
+    ncores = cfg$ncores_scfpcde
   )
   
   ## ----------------------------------------------------------
@@ -193,7 +278,9 @@ for (nm in names(traj_defs)) {
     r_pen = rpen.star,
     nbasis = nbasis.star,
     n_perm = cfg$n_perm_main,
-    topvarper = cfg$topvarper_run,fpc_varmax = T
+    topvarper = cfg$topvarper_run,
+    ncores = cfg$ncores_scfpcde,
+    fpc_varmax = TRUE
   )
   
   deg.names.p <- fpca.res$D_test_result %>%
@@ -215,7 +302,8 @@ for (nm in names(traj_defs)) {
     r_pen = rpen.star,
     nbasis = nbasis.star,
     n_perm = cfg$n_perm_deg,
-    topvarper = cfg$topvarper_deg
+    topvarper = cfg$topvarper_deg,
+    ncores = cfg$ncores_scfpcde
   )
   
   ## ----------------------------------------------------------
@@ -234,16 +322,26 @@ for (nm in names(traj_defs)) {
       logcounts = logcounts.matrix
     ),
     colData = DataFrame(
-      cell_type = clusters(cds_sub2),
-      pseudotime = tt
+      cell_type = tt.cluster,
+      cluster = tt.cluster,
+      pseudotime = tt,
+      row.names = names(tt)
     ),
     rowData = DataFrame(
-      gene_short_name = rownames(count.matrix)
+      gene_short_name = rownames(count.matrix),
+      row.names = rownames(count.matrix)
     ),
     metadata = list(
       study = cfg$analysis_tag
     )
   )
+
+  ## The package fallback uses this standard SingleCellExperiment for all
+  ## downstream count, logcount, and cluster access. The local mode preserves
+  ## the original Monocle object for exact reconstruction.
+  if (analysis_data_source == "package_preprocessed") {
+    cds_sub2 <- sce
+  }
   
   ori_tbl <- tibble(
     cell = colnames(sce),
@@ -272,6 +370,7 @@ for (nm in names(traj_defs)) {
   ## 7) Save all objects for this trajectory
   ## ----------------------------------------------------------
   traj_results[[nm]] <- list(
+    data_source = analysis_data_source,
     config = cfg,
     cds_sub = cds_sub,
     cds_sub2 = cds_sub2,
@@ -301,7 +400,7 @@ for (nm in names(traj_defs)) {
     gauss.pvals = gauss.pvals,
     gauss.qvals = gauss.qvals,
     ptimeDE.gauss.deg = ptimeDE.gauss.deg,
-    n_cells = ncol(cds_sub),
+    n_cells = nrow(y),
     n_genes = ncol(y)
   )
 }
@@ -313,7 +412,7 @@ traj_summary <- data.frame(
   trajectory = names(traj_results),
   clusters = sapply(traj_results, function(x) paste(x$config$clusters, collapse = ", ")),
   n_cells = sapply(traj_results, function(x) x$n_cells),
-  n_HVGs = 4000,
+  n_input_genes = sapply(traj_results, function(x) length(x$topvargenes)),
   n_filter_genes = sapply(traj_results, function(x) x$n_genes),
   # best_r_pen = sapply(traj_results, function(x) x$rpen.star),
   #  best_nbasis = sapply(traj_results, function(x) x$nbasis.star),

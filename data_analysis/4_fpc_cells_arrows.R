@@ -18,9 +18,30 @@
 ##   traj2_observed_cell_fpc2_fpc3_fitted_path.tiff
 ## ============================================================
 
-suppressPackageStartupMessages({
-  library(monocle3)
-})
+get_analysis_clusters <- function(res) {
+  if (!is.null(res$tt.cluster)) {
+    return(res$tt.cluster)
+  }
+
+  cds_obj <- res$cds_sub2
+  if (is.null(cds_obj)) {
+    stop("No cluster vector or cds_sub2 object was found")
+  }
+
+  cell_data <- SummarizedExperiment::colData(cds_obj)
+  for (field in c("cluster", "cell_type")) {
+    if (field %in% colnames(cell_data)) {
+      return(cell_data[[field]])
+    }
+  }
+
+  if (inherits(cds_obj, "cell_data_set") &&
+      requireNamespace("monocle3", quietly = TRUE)) {
+    return(monocle3::clusters(cds_obj))
+  }
+
+  stop("Could not identify cell clusters in the analysis result")
+}
 ## ------------------------------------------------------------
 ## Cluster settings
 ## ------------------------------------------------------------
@@ -238,13 +259,7 @@ get_cell_and_fitted_fpc_projection <- function(res,
     stop("Length of res$tt does not match number of rows in res$y")
   }
   
-  clu <- res$tt.cluster
-  
-  if (is.null(clu)) {
-    clu <- monocle3::clusters(
-      res$cds_sub2
-    )
-  }
+  clu <- get_analysis_clusters(res)
   
   clu <- as.character(
     clu

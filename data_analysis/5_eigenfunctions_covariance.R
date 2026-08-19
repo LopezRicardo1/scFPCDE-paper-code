@@ -35,8 +35,32 @@
 suppressPackageStartupMessages({
   library(fda)
   library(plot3D)
-  library(monocle3)
 })
+
+get_analysis_clusters <- function(res) {
+  if (!is.null(res$tt.cluster)) {
+    return(res$tt.cluster)
+  }
+
+  cds_obj <- res$cds_sub2
+  if (is.null(cds_obj)) {
+    stop("No cluster vector or cds_sub2 object was found")
+  }
+
+  cell_data <- SummarizedExperiment::colData(cds_obj)
+  for (field in c("cluster", "cell_type")) {
+    if (field %in% colnames(cell_data)) {
+      return(cell_data[[field]])
+    }
+  }
+
+  if (inherits(cds_obj, "cell_data_set") &&
+      requireNamespace("monocle3", quietly = TRUE)) {
+    return(monocle3::clusters(cds_obj))
+  }
+
+  stop("Could not identify cell clusters in the analysis result")
+}
 
 ## ------------------------------------------------------------
 ## PowerPoint multipanel settings
@@ -488,14 +512,7 @@ extract_celltype_pseudotime <- function(res,
     res$tt
   )
   
-  cluster_cells <- res$tt.cluster
-  
-  if (is.null(cluster_cells)) {
-    
-    cluster_cells <- monocle3::clusters(
-      res$cds_sub2
-    )
-  }
+  cluster_cells <- get_analysis_clusters(res)
   
   cluster_cells <- as.character(
     cluster_cells

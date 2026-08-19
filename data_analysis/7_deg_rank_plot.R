@@ -18,7 +18,6 @@
 
 suppressPackageStartupMessages({
   library(dplyr)
-  library(monocle3)
   library(Matrix)
   library(SingleCellExperiment)
   library(SummarizedExperiment)
@@ -246,11 +245,25 @@ prepare_curve_data <- function(res,
   ## Align cluster labels to FPCA cell order
   ## ----------------------------------------------------------
   
-  cluster_all <- as.character(
-    monocle3::clusters(cds_obj)
-  )
-  
-  names(cluster_all) <- colnames(cds_obj)
+  cluster_all <- res$tt.cluster
+  if (is.null(cluster_all)) {
+    cell_data <- as.data.frame(SummarizedExperiment::colData(cds_obj))
+    cluster_column <- c("cluster", "cell_type")
+    cluster_column <- cluster_column[cluster_column %in% names(cell_data)]
+    if (!length(cluster_column)) {
+      stop(
+        "Neither res$tt.cluster nor a cluster column was found.",
+        call. = FALSE
+      )
+    }
+    cluster_all <- cell_data[[cluster_column[[1L]]]]
+    names(cluster_all) <- rownames(cell_data)
+  }
+
+  cluster_all <- as.character(cluster_all)
+  if (is.null(names(cluster_all))) {
+    names(cluster_all) <- colnames(cds_obj)
+  }
   
   cluster_fpca <- cluster_all[cell_ids_fpca]
   
