@@ -10,13 +10,15 @@ This repository contains the analysis code used to reproduce results from the ma
 ## HB6 input modes
 
 Install the current `scFPCDE` package before running the numbered scripts. The
-loader automatically chooses between two reproducible input modes:
+HB6 preprocessed data are stored in this repository, keeping the R package
+focused on its reusable methods and simulation example. The loader chooses
+between two reproducible input modes:
 
 1. **Local full objects.** If both `data/scPure2_HB6_UMAP3D.rds` and
    `data/cds_HB6.rds` exist, `0_load_data.R` loads them and script 1 reproduces
    the cell-quality, pseudotime, variable-gene, and detection-filtering steps.
-2. **Packaged preprocessed data.** If those files are absent,
-   `0_load_data.R` loads `scFPCDE::scFPCDE_hb6`. These are the exact two
+2. **Repository preprocessed data.** If those files are absent,
+   `0_load_data.R` loads `data/scFPCDE_hb6.rda`. This contains the exact two
    already-subsetted paper trajectories, with aligned raw counts, uncentered
    logcounts, pseudotime, and B-cell labels. Script 1 starts from those inputs
    and reruns scFPCDE and PseudotimeDE.
@@ -34,11 +36,11 @@ directly; it will invoke the loader when needed.
 To choose a mode explicitly before starting R:
 
 ```sh
-SCFPCDE_PAPER_DATA_MODE=package R
+SCFPCDE_PAPER_DATA_MODE=preprocessed R
 SCFPCDE_PAPER_DATA_MODE=local R
 ```
 
-`auto` is the default. Package mode begins after trajectory reconstruction and
-cell/gene selection, so `bcell_hb6_pseudotime.R` is needed only when rebuilding
-the full Monocle trajectory from the original data. All required R packages
-must still be installed before running the analyses.
+`auto` is the default. Preprocessed mode begins after trajectory reconstruction
+and cell/gene selection, so `bcell_hb6_pseudotime.R` is needed only when
+rebuilding the full Monocle trajectory from the original data. All required R
+packages must still be installed before running the analyses.

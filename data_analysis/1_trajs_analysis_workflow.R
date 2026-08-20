@@ -6,7 +6,7 @@
 ##   - all results saved in one list: traj_results
 ## ============================================================
 
-## Load either the local full objects or the packaged preprocessed trajectories.
+## Load either the local full objects or the preprocessed paper trajectories.
 ## Sourcing this script directly therefore has the same behavior as running
 ## 0_load_data.R first.
 if (!exists("analysis_data_source", inherits = FALSE)) {
@@ -20,7 +20,7 @@ if (!exists("analysis_data_source", inherits = FALSE)) {
 
 if (!analysis_data_source %in% c(
   "local_full_objects",
-  "package_preprocessed"
+  "paper_preprocessed"
 )) {
   stop("Unknown HB6 analysis_data_source.", call. = FALSE)
 }
@@ -44,7 +44,7 @@ if (analysis_data_source == "local_full_objects") {
   })
 }
 
-make_packaged_sce <- function(trajectory, cfg) {
+make_preprocessed_sce <- function(trajectory, cfg) {
   stopifnot(
     identical(dimnames(trajectory$counts), dimnames(trajectory$yt)),
     identical(rownames(trajectory$yt), names(trajectory$tt)),
@@ -74,7 +74,7 @@ make_packaged_sce <- function(trajectory, cfg) {
     rowData = gene_data,
     metadata = list(
       study = cfg$analysis_tag,
-      source = "scFPCDE::scFPCDE_hb6"
+      source = "data/scFPCDE_hb6.rda"
     )
   )
 }
@@ -204,20 +204,20 @@ for (nm in names(traj_defs)) {
     y <- y[, gene.low.counts, drop = FALSE]
   } else {
     ## --------------------------------------------------------
-    ## 1b) Use the exact preprocessed package trajectory
+    ## 1b) Use the exact preprocessed paper trajectory
     ## --------------------------------------------------------
-    packaged <- hb6_package_data[[nm]]
-    if (is.null(packaged)) {
-      stop("Packaged trajectory was not found: ", nm, call. = FALSE)
+    preprocessed <- hb6_preprocessed_data[[nm]]
+    if (is.null(preprocessed)) {
+      stop("Preprocessed trajectory was not found: ", nm, call. = FALSE)
     }
 
-    cds_sub <- make_packaged_sce(packaged, cfg)
+    cds_sub <- make_preprocessed_sce(preprocessed, cfg)
     data.pseudo <- as.data.frame(colData(cds_sub))
     seu_sub <- NULL
 
-    y <- packaged$yt
-    tt <- packaged$tt
-    tt.cluster <- droplevels(packaged$clusters)
+    y <- preprocessed$yt
+    tt <- preprocessed$tt
+    tt.cluster <- droplevels(preprocessed$clusters)
     tt.order <- order(tt)
     y <- y[tt.order, , drop = FALSE]
     tt <- tt[tt.order]
@@ -336,10 +336,10 @@ for (nm in names(traj_defs)) {
     )
   )
 
-  ## The package fallback uses this standard SingleCellExperiment for all
+  ## The preprocessed-data fallback uses this SingleCellExperiment for all
   ## downstream count, logcount, and cluster access. The local mode preserves
   ## the original Monocle object for exact reconstruction.
-  if (analysis_data_source == "package_preprocessed") {
+  if (analysis_data_source == "paper_preprocessed") {
     cds_sub2 <- sce
   }
   
